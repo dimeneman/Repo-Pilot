@@ -5,7 +5,7 @@ All settings can be overridden via environment variables or a .env file.
 Sensible defaults are provided for local development.
 """
 
-from typing import Any
+from typing import Any, Optional
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     # ── Vector DB (Qdrant) ────────────────────────────────────────────────
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
+    QDRANT_API_KEY: Optional[str] = None
     QDRANT_COLLECTION: str = "repo_chunks"
 
     # ── Redis ─────────────────────────────────────────────────────────────

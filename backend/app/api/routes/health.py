@@ -38,11 +38,9 @@ async def health_check() -> HealthResponse:
     # ── Vector store check ───────────────────────────────────────────────
     qdrant_status = "unavailable"
     try:
-        from qdrant_client import QdrantClient
+        from app.retrieval.vector_store import create_qdrant_client
 
-        client = QdrantClient(
-            host=settings.QDRANT_HOST, port=settings.QDRANT_PORT, timeout=5,
-        )
+        client = create_qdrant_client(timeout=5.0)
         collections = client.get_collections()
         qdrant_status = f"connected ({len(collections.collections)} collections)"
     except Exception as exc:

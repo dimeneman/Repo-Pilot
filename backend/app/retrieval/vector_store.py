@@ -30,13 +30,54 @@ class SearchResult:
     metadata: Optional[Dict[str, Any]] = None
 
 
+def create_qdrant_client(
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+    api_key: Optional[str] = None,
+    timeout: float = 5.0,
+):
+    """Create a configured QdrantClient instance supporting local and cloud deployments.
+
+    - If host starts with 'http://' or 'https://', it is passed as `url`.
+    - If `api_key` is provided (or configured via settings.QDRANT_API_KEY), it is passed to authenticate.
+    - Otherwise, standard local host and port are used.
+    """
+    from qdrant_client import QdrantClient
+
+    target_host = host or settings.QDRANT_HOST
+    target_port = port or settings.QDRANT_PORT
+    raw_key = api_key if api_key is not None else settings.QDRANT_API_KEY
+    target_api_key = raw_key.strip() if raw_key and raw_key.strip() else None
+
+    if target_host.startswith("http://") or target_host.startswith("https://"):
+        return QdrantClient(
+            url=target_host,
+            api_key=target_api_key,
+            timeout=timeout,
+        )
+    return QdrantClient(
+        host=target_host,
+        port=target_port,
+        api_key=target_api_key,
+        timeout=timeout,
+    )
+
+
 class VectorStoreService:
     """Manages vector storage and similarity search in Qdrant (or in-memory fallback)."""
 
-    def __init__(self, host: Optional[str] = None, port: Optional[int] = None, collection: Optional[str] = None):
+    def __init__(
+        self,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        collection: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ):
         self.host = host or settings.QDRANT_HOST
         self.port = port or settings.QDRANT_PORT
         self.collection = collection or settings.QDRANT_COLLECTION
+        raw_key = api_key if api_key is not None else settings.QDRANT_API_KEY
+        self.api_key = raw_key.strip() if raw_key and raw_key.strip() else None
         self._client = None
         self._is_memory = False
         self._memory_store: Dict[str, List[Dict[str, Any]]] = {}  # repo_id -> list of chunk dicts
@@ -44,19 +85,26 @@ class VectorStoreService:
 
     def _connect(self) -> None:
         """Establish connection to Qdrant or fallback to memory."""
+        endpoint = (
+            self.host
+            if (self.host.startswith("http://") or self.host.startswith("https://"))
+            else f"{self.host}:{self.port}"
+        )
         try:
-            from qdrant_client import QdrantClient
-            from qdrant_client.http.exceptions import UnexpectedResponse
-
-            # Try connecting to remote Qdrant
-            client = QdrantClient(host=self.host, port=self.port, timeout=2.0)
+            client = create_qdrant_client(
+                host=self.host,
+                port=self.port,
+                api_key=self.api_key,
+                timeout=5.0,
+            )
             client.get_collections()
             self._client = client
             self._is_memory = False
-            logger.info(f"Connected to Qdrant at {self.host}:{self.port}")
+            auth_info = " with API key" if self.api_key else ""
+            logger.info(f"Connected to Qdrant at {endpoint}{auth_info}")
         except Exception as exc:
             logger.warning(
-                f"Could not connect to Qdrant at {self.host}:{self.port} ({exc}). "
+                f"Could not connect to Qdrant at {endpoint} ({exc}). "
                 "Operating in in-memory fallback mode."
             )
             self._is_memory = True

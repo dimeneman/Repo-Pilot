@@ -182,6 +182,9 @@ All settings are controlled via environment variables. See [`.env.example`](.env
 | `LLM_PROVIDER` | `gemini` | LLM backend: `gemini` |
 | `LLM_MODEL` | `gemini-2.5-flash` | Model identifier |
 | `GEMINI_API_KEY` | — | Google Gemini API key |
+| `QDRANT_HOST` | `localhost` | Qdrant host or cluster URL (`https://...` for Cloud) |
+| `QDRANT_PORT` | `6333` | Qdrant REST port |
+| `QDRANT_API_KEY` | — | (Optional) Qdrant Cloud API key for production / Render |
 | `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Sentence-Transformers model name |
 | `EMBEDDING_DIMENSION` | `384` | Embedding vector size |
 | `CHUNK_SIZE` | `1500` | Characters per code chunk |
