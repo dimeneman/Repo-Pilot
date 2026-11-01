@@ -130,6 +130,16 @@ class VectorStoreService:
                     ),
                 )
                 logger.info(f"Created Qdrant collection '{self.collection}' (dim={dim})")
+
+            # Ensure payload index on repo_id for fast filtering and safe deletion
+            try:
+                self._client.create_payload_index(
+                    collection_name=self.collection,
+                    field_name="repo_id",
+                    field_schema=models.PayloadSchemaType.KEYWORD,
+                )
+            except Exception as idx_err:
+                logger.debug(f"Payload index creation note: {idx_err}")
         except Exception as exc:
             logger.error(f"Error ensuring collection '{self.collection}': {exc}")
             self._is_memory = True
@@ -310,7 +320,7 @@ class VectorStoreService:
         return results
 
     async def delete_by_repo(self, repo_id: str) -> None:
-        """Delete all vectors for a specific repository."""
+        """Delete all vectors for a specific repository safely without breaking the pipeline."""
         if str(repo_id) in self._memory_store:
             del self._memory_store[str(repo_id)]
 
@@ -333,7 +343,35 @@ class VectorStoreService:
                 )
                 logger.info(f"Deleted vectors in Qdrant for repo {repo_id}")
             except Exception as exc:
-                logger.error(f"Failed to delete vectors from Qdrant: {exc}")
+                logger.warning(
+                    f"Filter-based vector deletion for repo {repo_id} note: {exc}. "
+                    "Attempting scroll-and-delete fallback..."
+                )
+                try:
+                    from qdrant_client.http import models
+                    records, _ = self._client.scroll(
+                        collection_name=self.collection,
+                        scroll_filter=models.Filter(
+                            must=[
+                                models.FieldCondition(
+                                    key="repo_id",
+                                    match=models.MatchValue(value=str(repo_id)),
+                                )
+                            ]
+                        ),
+                        limit=5000,
+                        with_payload=False,
+                        with_vectors=False,
+                    )
+                    if records:
+                        ids = [r.id for r in records]
+                        self._client.delete(
+                            collection_name=self.collection,
+                            points_selector=models.PointIdsList(points=ids),
+                        )
+                        logger.info(f"Purged {len(ids)} points by ID for repo {repo_id}")
+                except Exception as fallback_exc:
+                    logger.warning(f"Could not purge vectors for repo {repo_id}: {fallback_exc}. Continuing safely.")
 
     async def get_collection_info(self) -> Dict[str, Any]:
         """Return information about the collection status."""

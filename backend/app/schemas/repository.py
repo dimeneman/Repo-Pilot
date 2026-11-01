@@ -68,6 +68,7 @@ class RepoResponse(BaseModel):
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    job_id: Optional[UUID] = None
 
 
 class RepoStatusResponse(BaseModel):
@@ -81,6 +82,27 @@ class RepoStatusResponse(BaseModel):
     file_count: int
     chunk_count: int
     step_description: Optional[str] = None
+    stage: Optional[str] = None
+    job_id: Optional[UUID] = None
+
+
+class JobResponse(BaseModel):
+    """Representation of an ingestion / reindexing background job."""
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID
+    repo_id: UUID
+    job_type: str
+    status: str
+    stage: Optional[str] = None
+    progress: float = 0.0
+    step_description: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
 
 
 class RepoFileResponse(BaseModel):

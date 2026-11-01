@@ -42,6 +42,30 @@ services:
     restart: "no"
 
   # ---------------------------------------------------------------------------
+  # Worker — Ingestion daemon with mounted source
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      target: development
+    volumes:
+      - ../backend:/app
+      - repo_data:/app/data
+      - /app/.venv
+    command: python -m app.worker
+    environment:
+      DEBUG: "true"
+      DATABASE_URL: postgresql+asyncpg://repopilot:repopilot@postgres:5432/repopilot
+      DATABASE_URL_SYNC: postgresql://repopilot:repopilot@postgres:5432/repopilot
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      REDIS_URL: redis://redis:6379/0
+      REPOS_DIR: /app/data/repos
+      UPLOADS_DIR: /app/data/uploads
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
   # Frontend — Next.js dev server with fast refresh
   # ---------------------------------------------------------------------------
   frontend:

@@ -4,11 +4,12 @@ Ingestion worker — asynchronous background pipeline for cloning, parsing, chun
 from __future__ import annotations
 
 import datetime
+from datetime import timezone
 import shutil
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -47,40 +48,81 @@ class IngestionWorker:
         self.embedding_service = embedding_service or EmbeddingService()
         self.vector_store = vector_store or VectorStoreService()
 
-    async def run_ingestion(self, repo_id_str: str, access_token: Optional[str] = None) -> None:
-        """Run the full ingestion pipeline in the background."""
-        repo_id = uuid.UUID(repo_id_str)
+    async def reconcile_stale_jobs(self) -> None:
+        """Reset any stale jobs that were running when the process previously terminated."""
+        async with async_session_factory() as db:
+            try:
+                # Mark orphaned running jobs as failed
+                await db.execute(
+                    update(Job)
+                    .where(Job.status == "running")
+                    .values(
+                        status="failed",
+                        stage="failed",
+                        error_message="Ingestion interrupted by worker restart. Safe to retry.",
+                        completed_at=datetime.datetime.now(timezone.utc),
+                        updated_at=datetime.datetime.now(timezone.utc),
+                    )
+                )
+                # Reconcile corresponding repositories
+                await db.execute(
+                    update(Repository)
+                    .where(Repository.status.in_(["cloning", "parsing", "indexing"]))
+                    .values(
+                        status="failed",
+                        error_message="Ingestion interrupted by worker restart. Please re-index.",
+                        updated_at=datetime.datetime.now(timezone.utc),
+                    )
+                )
+                await db.commit()
+                logger.info("Reconciled any stale background jobs on worker startup.")
+            except Exception as exc:
+                logger.warning(f"Error reconciling stale jobs: {exc}")
+
+    async def process_job(self, job_id: str, access_token: Optional[str] = None) -> None:
+        """Process a specific Job by its ID."""
+        target_job_id = uuid.UUID(str(job_id))
 
         async with async_session_factory() as db:
-            repo = await db.get(Repository, repo_id)
-            if not repo:
-                logger.error(f"Ingestion worker: repo {repo_id} not found.")
+            job = await db.get(Job, target_job_id)
+            if not job:
+                logger.error(f"Ingestion worker: Job {job_id} not found.")
                 return
 
-            # Create or reuse existing Job
-            job = Job(
-                repo_id=repo.id,
-                job_type="ingest",
-                status="running",
-                progress=0.05,
-                total_steps=10,
-                current_step=1,
-                step_description="Initiating repository ingestion",
-                started_at=datetime.datetime.now(datetime.timezone.utc),
-            )
-            db.add(job)
+            repo = await db.get(Repository, job.repo_id)
+            if not repo:
+                logger.error(f"Ingestion worker: Repo {job.repo_id} for Job {job_id} not found.")
+                job.status = "failed"
+                job.stage = "failed"
+                job.error_message = "Associated repository record not found."
+                job.completed_at = datetime.datetime.now(timezone.utc)
+                await db.commit()
+                return
+
+            effective_token = access_token or job.access_token
+
+            # Transition to running
+            job.status = "running"
+            job.stage = "cloning"
+            job.progress = 0.10
+            job.started_at = job.started_at or datetime.datetime.now(timezone.utc)
+            job.updated_at = datetime.datetime.now(timezone.utc)
+            job.step_description = f"Initiating ingestion for {repo.owner}/{repo.name}"
             repo.status = "cloning"
+            repo.error_message = None
             await db.commit()
-            await db.refresh(job)
 
             repo_dir: Optional[Path] = None
 
             try:
-                # STEP 1: Cloning repository
-                logger.info(f"Cloning {repo.url} ({repo.default_branch})")
-                job.current_step = 2
-                job.progress = 0.15
+                # ── STEP 1: Cloning repository ───────────────────────────────────
+                logger.info(f"Cloning {repo.url} ({repo.default_branch or 'main'}) for Job {job.id}")
+                job.current_step = 1
+                job.total_steps = 6
+                job.progress = 0.20
+                job.stage = "cloning"
                 job.step_description = f"Cloning repository {repo.owner}/{repo.name}"
+                job.updated_at = datetime.datetime.now(timezone.utc)
                 await db.commit()
 
                 target_dir = Path(settings.REPOS_DIR) / f"{repo.owner}_{repo.name}_{repo.id}"
@@ -88,23 +130,27 @@ class IngestionWorker:
                     url=repo.url,
                     branch=repo.default_branch or "main",
                     target_dir=str(target_dir),
-                    access_token=access_token,
+                    access_token=effective_token,
                 )
 
-                # STEP 2: Filtering files
-                job.current_step = 3
-                job.progress = 0.30
+                # ── STEP 2: Filtering and scanning files ─────────────────────────
+                job.current_step = 2
+                job.progress = 0.35
+                job.stage = "parsing"
                 job.step_description = "Scanning and filtering source files"
+                job.updated_at = datetime.datetime.now(timezone.utc)
                 repo.status = "parsing"
                 await db.commit()
 
                 valid_files = self.file_filter.filter_repository(repo_dir)
-                logger.info(f"Filtered {len(valid_files)} eligible files for repo {repo_id}")
+                logger.info(f"Filtered {len(valid_files)} eligible files for repo {repo.id}")
 
-                # STEP 3: Parsing files and creating File records
-                job.current_step = 4
-                job.progress = 0.45
+                # ── STEP 3: Parsing files and creating File records ──────────────
+                job.current_step = 3
+                job.progress = 0.50
+                job.stage = "parsing"
                 job.step_description = f"Parsing {len(valid_files)} source files"
+                job.updated_at = datetime.datetime.now(timezone.utc)
                 await db.commit()
 
                 # Clean up existing files and vectors for this repo (for re-index or retry)
@@ -138,16 +184,17 @@ class IngestionWorker:
                     db.add(f_model)
 
                 await db.commit()
-                # Refresh file models to get primary keys
                 for f_model in file_models:
                     await db.refresh(f_model)
 
                 file_lookup = {f.path: f.id for f in file_models}
 
-                # STEP 4: Chunking files
-                job.current_step = 5
-                job.progress = 0.60
+                # ── STEP 4: Chunking files ───────────────────────────────────────
+                job.current_step = 4
+                job.progress = 0.65
+                job.stage = "chunking"
                 job.step_description = "Extracting code-aware semantic chunks"
+                job.updated_at = datetime.datetime.now(timezone.utc)
                 repo.status = "indexing"
                 await db.commit()
 
@@ -197,18 +244,22 @@ class IngestionWorker:
 
                 await db.commit()
 
-                # STEP 5: Generating vector embeddings
-                job.current_step = 7
-                job.progress = 0.75
+                # ── STEP 5: Generating vector embeddings ─────────────────────────
+                job.current_step = 5
+                job.progress = 0.80
+                job.stage = "embeddings"
                 job.step_description = f"Generating vector embeddings for {len(chunk_texts_to_embed)} chunks"
+                job.updated_at = datetime.datetime.now(timezone.utc)
                 await db.commit()
 
                 embeddings = self.embedding_service.encode(chunk_texts_to_embed)
 
-                # STEP 6: Indexing in Vector Store
-                job.current_step = 9
+                # ── STEP 6: Indexing in Vector Store ─────────────────────────────
+                job.current_step = 6
                 job.progress = 0.90
+                job.stage = "indexing"
                 job.step_description = "Upserting vectors into vector database"
+                job.updated_at = datetime.datetime.now(timezone.utc)
                 await db.commit()
 
                 await self.vector_store.ensure_collection()
@@ -218,39 +269,61 @@ class IngestionWorker:
                     repo_id=str(repo.id),
                 )
 
-                # STEP 7: Finalizing repository metadata
+                # ── STEP 7: Finalizing repository metadata ───────────────────────
                 repo.file_count = len(file_models)
                 repo.chunk_count = len(chunk_models)
                 repo.language_stats = language_counts
                 repo.status = "ready"
-                repo.last_indexed_at = datetime.datetime.now(datetime.timezone.utc)
+                repo.last_indexed_at = datetime.datetime.now(timezone.utc)
                 repo.error_message = None
 
                 job.status = "completed"
+                job.stage = "done"
                 job.progress = 1.0
-                job.current_step = 10
                 job.step_description = f"Successfully indexed {len(file_models)} files and {len(chunk_models)} chunks"
-                job.completed_at = datetime.datetime.now(datetime.timezone.utc)
+                job.completed_at = datetime.datetime.now(timezone.utc)
+                job.updated_at = datetime.datetime.now(timezone.utc)
                 await db.commit()
 
                 logger.info(
-                    f"Repository {repo.owner}/{repo.name} successfully indexed "
+                    f"Job {job.id} completed: repository {repo.owner}/{repo.name} successfully indexed "
                     f"({len(file_models)} files, {len(chunk_models)} chunks)."
                 )
 
             except Exception as exc:
-                logger.exception(f"Ingestion failed for repo {repo_id}: {exc}")
+                logger.exception(f"Ingestion failed for repo {repo.id} (job {job.id}): {exc}")
                 repo.status = "failed"
                 repo.error_message = str(exc)
 
                 job.status = "failed"
+                job.stage = "failed"
                 job.error_message = str(exc)
-                job.completed_at = datetime.datetime.now(datetime.timezone.utc)
+                job.completed_at = datetime.datetime.now(timezone.utc)
+                job.updated_at = datetime.datetime.now(timezone.utc)
                 await db.commit()
 
+    async def run_ingestion(self, repo_id_str: str, access_token: Optional[str] = None) -> None:
+        """Backward-compatible entry point: creates or fetches a Job and executes it."""
+        repo_id = uuid.UUID(repo_id_str)
+        async with async_session_factory() as db:
+            job = Job(
+                repo_id=repo_id,
+                job_type="ingest",
+                status="pending",
+                stage="pending",
+                progress=0.0,
+                access_token=access_token,
+                step_description="Queued for ingestion",
+            )
+            db.add(job)
+            await db.commit()
+            await db.refresh(job)
+            job_id = str(job.id)
 
-# Helper function to invoke from FastAPI background tasks or CLI
+        await self.process_job(job_id=job_id, access_token=access_token)
+
+
+# Helper function to invoke from FastAPI or CLI
 async def run_ingestion(repo_id_str: str, access_token: Optional[str] = None) -> None:
     worker = IngestionWorker()
     await worker.run_ingestion(repo_id_str, access_token=access_token)
-

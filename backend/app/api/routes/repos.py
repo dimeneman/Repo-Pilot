@@ -57,14 +57,13 @@ def _parse_github_url(url: str) -> tuple[str, str]:
 )
 async def ingest_repository(
     payload: RepoIngestRequest,
-    background_tasks: BackgroundTasks,
     db: DBSession,
     user: CurrentUser,
 ) -> RepoResponse:
-    """Accept a GitHub URL, create a repository record, and launch
-    background ingestion.
+    """Accept a GitHub URL, create a repository and job record, and enqueue
+    for background worker processing.
 
-    Returns the newly-created repository immediately with status ``pending``.
+    Returns immediately with status ``pending`` and the created ``job_id``.
     """
     owner, name = _parse_github_url(payload.url)
 
@@ -77,19 +76,34 @@ async def ingest_repository(
 
     if existing is not None:
         log.info(f"Repository {payload.url} already tracked (id={existing.id}, status={existing.status})")
-        # If it failed previously, auto-retry ingestion
-        if existing.status == "failed":
+        # If it failed previously or user is re-triggering, queue a new job
+        if existing.status in ("failed", "pending"):
             existing.status = "pending"
             existing.error_message = None
             if payload.branch:
                 existing.default_branch = payload.branch
+
+            job = Job(
+                repo_id=existing.id,
+                job_type="ingest",
+                status="pending",
+                stage="pending",
+                progress=0.0,
+                step_description="Queued for ingestion",
+                access_token=payload.access_token,
+            )
+            db.add(job)
             await db.commit()
             await db.refresh(existing)
-            try:
-                from app.services.ingestion import run_ingestion  # type: ignore[import-untyped]
-                background_tasks.add_task(run_ingestion, str(existing.id), payload.access_token)
-            except ImportError:
-                pass
+            await db.refresh(job)
+
+            from app.workers.queue import enqueue_job
+            await enqueue_job(str(job.id), str(existing.id), payload.access_token)
+
+            resp = RepoResponse.model_validate(existing)
+            resp.job_id = job.id
+            return resp
+
         return RepoResponse.model_validate(existing)
 
     repo = Repository(
@@ -103,21 +117,27 @@ async def ingest_repository(
     await db.commit()
     await db.refresh(repo)
 
-    log.info(f"Created repository {repo.id} for {payload.url}")
+    job = Job(
+        repo_id=repo.id,
+        job_type="ingest",
+        status="pending",
+        stage="pending",
+        progress=0.0,
+        step_description="Queued for ingestion",
+        access_token=payload.access_token,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
 
-    # Launch ingestion in the background.
-    # The actual work is done by the services layer; if it hasn't been
-    # built yet we log a warning rather than crash the request.
-    try:
-        from app.services.ingestion import run_ingestion  # type: ignore[import-untyped]
+    log.info(f"Created repository {repo.id} and job {job.id} for {payload.url}")
 
-        background_tasks.add_task(run_ingestion, str(repo.id), payload.access_token)
-    except ImportError:
-        log.warning(
-            "Ingestion service not available — repository will remain pending."
-        )
+    from app.workers.queue import enqueue_job
+    await enqueue_job(str(job.id), str(repo.id), payload.access_token)
 
-    return RepoResponse.model_validate(repo)
+    resp = RepoResponse.model_validate(repo)
+    resp.job_id = job.id
+    return resp
 
 
 @router.get(
@@ -180,6 +200,8 @@ async def get_repo_status(
         file_count=repo.file_count,
         chunk_count=repo.chunk_count,
         step_description=job.step_description if job else None,
+        stage=job.stage if job else repo.status,
+        job_id=job.id if job else None,
     )
 
 
@@ -220,11 +242,10 @@ async def list_repo_files(
 )
 async def reindex_repository(
     repo_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     db: DBSession,
     user: CurrentUser,
 ) -> RepoResponse:
-    """Re-index an already-ingested repository."""
+    """Re-index an already-ingested repository in the background worker."""
     repo = await db.get(Repository, repo_id)
     if repo is None:
         raise HTTPException(
@@ -236,14 +257,26 @@ async def reindex_repository(
     await db.commit()
     await db.refresh(repo)
 
-    try:
-        from app.services.ingestion import run_ingestion  # type: ignore[import-untyped]
+    job = Job(
+        repo_id=repo.id,
+        job_type="reindex",
+        status="pending",
+        stage="pending",
+        progress=0.0,
+        step_description="Queued for reindexing",
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
 
-        background_tasks.add_task(run_ingestion, str(repo.id))
-    except ImportError:
-        log.warning("Ingestion service not available for reindex.")
+    log.info(f"Created reindex job {job.id} for repo {repo.id}")
 
-    return RepoResponse.model_validate(repo)
+    from app.workers.queue import enqueue_job
+    await enqueue_job(str(job.id), str(repo.id))
+
+    resp = RepoResponse.model_validate(repo)
+    resp.job_id = job.id
+    return resp
 
 
 @router.delete(

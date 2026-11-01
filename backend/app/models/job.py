@@ -38,12 +38,15 @@ class Job(Base):
 
     # pending → running → completed | failed
     status: Mapped[str] = mapped_column(String(50), default="pending")
+    # cloning → parsing → chunking → embeddings → indexing → done | failed
+    stage: Mapped[Optional[str]] = mapped_column(String(50), default="pending", nullable=True)
 
     progress: Mapped[float] = mapped_column(Float, default=0.0)
     total_steps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     current_step: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     step_description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
+    access_token: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     started_at: Mapped[Optional[datetime]] = mapped_column(
@@ -52,9 +55,20 @@ class Job(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True,
     )
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(),
     )
+
+    @property
+    def finished_at(self) -> Optional[datetime]:
+        return self.completed_at
+
+    @finished_at.setter
+    def finished_at(self, value: Optional[datetime]) -> None:
+        self.completed_at = value
 
     # ── Relationships ────────────────────────────────────────────────────
     repository: Mapped["Repository"] = relationship(

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -74,4 +75,11 @@ async def init_db() -> None:
     log.info("Creating database tables …")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Migrate new columns on existing jobs table if needed
+        try:
+            await conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS stage VARCHAR(50) DEFAULT 'pending';"))
+            await conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();"))
+            await conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS access_token VARCHAR(500);"))
+        except Exception as mig_err:
+            log.debug(f"Column migration check note: {mig_err}")
     log.info("Database tables created successfully.")

@@ -32,31 +32,42 @@ graph LR
     User["🧑‍💻 Web UI"] --> FE["⚛️ Next.js Frontend"]
     FE --> API["⚡ FastAPI Backend"]
     API --> PG[("🐘 PostgreSQL")]
-    API --> QD[("🔮 Qdrant")]
-    API --> Redis[("⚡ Redis")]
+    API --> Redis[("⚡ Redis Queue")]
+    Worker["⚙️ Background Worker"] --> Redis
+    Worker --> PG
+    Worker --> QD[("🔮 Qdrant")]
+    API --> QD
     API --> LLM{"🤖 Google Gemini"}
-    API --> GH["🐙 GitHub API"]
+    Worker --> GH["🐙 GitHub API"]
 ```
 
 ### Data Flow
 
 ```mermaid
 flowchart TD
-    A[User submits GitHub URL] --> B[Clone / Pull Repository]
-    B --> C[Parse & Filter Files]
-    C --> D[Chunk Source Code]
-    D --> E[Generate Embeddings]
-    E --> F[Store in Qdrant]
-    C --> G[Extract Metadata]
-    G --> H[Store in PostgreSQL]
+    A[User submits GitHub URL] --> B[API creates pending Job]
+    B --> C[Push Job to Queue / DB]
+    C --> D[Return 202 Accepted with job_id]
     
-    I[User asks question] --> J[Embed Query]
-    J --> K[Hybrid Search: Semantic + BM25]
-    K --> L[Rerank Results]
-    L --> M[Build Prompt with Context]
-    M --> N[LLM Generates Answer]
-    N --> O[Attach Source Citations]
-    O --> P[Return to User]
+    subgraph Background Worker
+        E[Worker dequeues Job] --> F[Clone / Pull Repository]
+        F --> G[Parse & Filter Files]
+        G --> H[Chunk Source Code]
+        H --> I[Generate Embeddings]
+        I --> J[Store in Qdrant Vector Store]
+        G --> K[Extract & Store Metadata in PostgreSQL]
+        J --> L[Update Job & Repo status to completed]
+    end
+    
+    C -.-> E
+    
+    M[User asks question] --> N[Embed Query]
+    N --> O[Hybrid Search: Semantic + BM25]
+    O --> P[Rerank Results]
+    P --> Q[Build Prompt with Context]
+    Q --> R[LLM Generates Answer]
+    R --> S[Attach Source Citations]
+    S --> T[Return to User]
 ```
 
 ---
@@ -137,11 +148,24 @@ pip install -r requirements.txt
 alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 
-# 3. Frontend (in a separate terminal)
+# 3. Background Worker (in a separate terminal)
+# Note: You can also set RUN_EMBEDDED_WORKER=true in your .env for single-process local dev
+python -m app.worker
+
+# 4. Frontend (in a separate terminal)
 cd frontend
 npm install
 npm run dev
 ```
+
+### Production Architecture (e.g. Render)
+
+To prevent HTTP request timeouts during repo cloning, parsing, and vector embeddings, RepoPilot runs ingestion as a background job:
+- **API Web Service**: Validates requests, writes a pending `Job` record to the database, publishes the job ID, and returns `202 Accepted` immediately.
+- **Worker Daemon**: Runs `python -m app.worker`, dequeues tasks via Redis (or resilient DB polling fallback), executes cloning/parsing/embedding/Qdrant writes, and updates progress in real time.
+- **Render Setup**:
+  - **Web Service**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+  - **Background Worker**: `python -m app.worker` (shares the same database and Qdrant environment variables)
 
 ### Running Tests
 
@@ -191,6 +215,8 @@ All settings are controlled via environment variables. See [`.env.example`](.env
 | `CHUNK_OVERLAP` | `200` | Overlap between chunks |
 | `MAX_FILE_SIZE_KB` | `500` | Skip files larger than this |
 | `SECRET_KEY` | — | JWT signing key |
+| `RUN_EMBEDDED_WORKER` | `false` | When `true`, runs background worker task inside web process for local dev |
+| `WORKER_POLL_INTERVAL` | `2.0` | Polling interval in seconds for background worker queue |
 | `GITHUB_CLIENT_ID` | — | (Optional) GitHub OAuth App Client ID |
 | `GITHUB_CLIENT_SECRET` | — | (Optional) GitHub OAuth App Client Secret |
 | `DEBUG` | `false` | Enable debug logging |

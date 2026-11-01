@@ -47,28 +47,28 @@ async def lifespan(app: FastAPI):
 
     # Reset any stale active jobs from previous crashes or container restarts
     try:
-        from sqlalchemy import update
-        from app.db.session import async_session_factory
-        from app.models.job import Job
-        from app.models.repository import Repository
-
-        async with async_session_factory() as db:
-            await db.execute(
-                update(Job)
-                .where(Job.status == "running")
-                .values(status="failed", error_message="Ingestion interrupted by server restart.")
-            )
-            await db.execute(
-                update(Repository)
-                .where(Repository.status.in_(["cloning", "parsing", "indexing"]))
-                .values(status="failed", error_message="Ingestion interrupted by server restart. Please re-index.")
-            )
-            await db.commit()
-            logger.info("Reconciled stale background jobs on startup.")
+        from app.workers.ingestion_worker import IngestionWorker
+        await IngestionWorker().reconcile_stale_jobs()
     except Exception as exc:
         logger.warning(f"Failed to reconcile stale jobs on startup: {exc}")
 
+    # Optional embedded background worker for single-process local development
+    worker_task = None
+    if settings.RUN_EMBEDDED_WORKER:
+        import asyncio
+        from app.worker import run_worker_loop
+        logger.info("Starting embedded background worker task...")
+        worker_task = asyncio.create_task(run_worker_loop())
+
     yield
+
+    if worker_task:
+        logger.info("Stopping embedded background worker task...")
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            pass
 
     logger.info(f"Shutting down {settings.PROJECT_NAME}...")
 

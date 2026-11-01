@@ -92,6 +92,36 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
+  # Worker — Background ingestion and vector indexing daemon
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: repopilot-worker
+    command: python -m app.worker
+    environment:
+      DATABASE_URL: postgresql+asyncpg://repopilot:repopilot@postgres:5432/repopilot
+      DATABASE_URL_SYNC: postgresql://repopilot:repopilot@postgres:5432/repopilot
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      REDIS_URL: redis://redis:6379/0
+      REPOS_DIR: /app/data/repos
+      UPLOADS_DIR: /app/data/uploads
+    env_file:
+      - ../.env
+    volumes:
+      - repo_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
   # Frontend — Next.js web application
   # ---------------------------------------------------------------------------
   frontend:

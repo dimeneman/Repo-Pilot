@@ -40,8 +40,10 @@ class Settings(BaseSettings):
     QDRANT_API_KEY: Optional[str] = None
     QDRANT_COLLECTION: str = "repo_chunks"
 
-    # ── Redis ─────────────────────────────────────────────────────────────
+    # ── Redis & Background Worker ─────────────────────────────────────────
     REDIS_URL: str = "redis://localhost:6379/0"
+    RUN_EMBEDDED_WORKER: bool = False
+    WORKER_POLL_INTERVAL: float = 2.0
 
     # ── LLM (Google Gemini) ───────────────────────────────────────────────
     GEMINI_API_KEY: str = ""
