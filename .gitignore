@@ -1,0 +1,184 @@
+# =============================================================================
+# RepoPilot — .gitignore
+# =============================================================================
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+sdist/
+develop-eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Type checking / linting caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.pytype/
+
+# ── Node.js / Next.js ───────────────────────────────────────────────────────
+node_modules/
+.next/
+out/
+.turbo/
+.vercel/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnp.*
+.yarn/
+
+# ── Environment / Secrets ───────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+
+# ── IDE / Editor ─────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# ── OS Generated ─────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ── Data (keep directory structure, ignore contents) ─────────────────────────
+data/repos/*
+!data/repos/.gitkeep
+data/uploads/*
+!data/uploads/.gitkeep
+data/samples/*
+!data/samples/.gitkeep
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Coverage & Testing ──────────────────────────────────────────────────────
+.coverage
+.coverage.*
+htmlcov/
+coverage/
+coverage.xml
+*.cover
+.hypothesis/
+
+# ── Docker (ignore ephemeral volumes, keep compose files) ────────────────────
+docker-compose.override.yml
+
+# ── Alembic ──────────────────────────────────────────────────────────────────
+# Keep migration files, ignore auto-generated temp files
+backend/alembic/versions/__pycache__/
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+*.bak
+*.tmp
+*.temp
+.cache/
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.eggs/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# =========================
+# Node / Next.js
+# =========================
+node_modules/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =========================
+# Environment files
+# =========================
+.env
+.env.local
+.env.*.local
+
+# Keep example env files tracked
+!.env.example
+!frontend/.env.local.example
+
+# =========================
+# Local data / runtime files
+# =========================
+data/
+backend/data/
+frontend/.vercel/
+.vercel/
+
+# If you want to keep empty folders in Git, add .gitkeep files and unignore them manually
+# Example:
+# !data/.gitkeep
+# !backend/data/.gitkeep
+# !frontend/public/.gitkeep
+
+# =========================
+# OS / editor files
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# =========================
+# Misc
+# =========================
+*.sqlite3
+*.db
+*.log

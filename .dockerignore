@@ -1,0 +1,9 @@
+node_modules
+.venv
+.git
+.next
+.pytest_cache
+data/repos/*
+data/uploads/*
+__pycache__
+

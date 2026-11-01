@@ -1,0 +1,76 @@
+version: "3.9"
+
+# =============================================================================
+# RepoPilot — Development Docker Compose Override
+# =============================================================================
+# Usage:
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up
+#
+# This overlay mounts source code as volumes for hot-reload during development.
+# It does NOT build production images — it starts live dev servers instead.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Backend — Hot-reload with uvicorn --reload
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      target: development          # Uses the dev stage if multi-stage Dockerfile
+    volumes:
+      - ../backend:/app            # Mount source for live editing
+      - repo_data:/app/data        # Persistent data directory
+      - /app/.venv                 # Prevent host .venv from shadowing container's
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+      --reload-dir /app/app
+      --log-level debug
+    environment:
+      DEBUG: "true"
+      DATABASE_URL: postgresql+asyncpg://repopilot:repopilot@postgres:5432/repopilot
+      DATABASE_URL_SYNC: postgresql://repopilot:repopilot@postgres:5432/repopilot
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      REDIS_URL: redis://redis:6379/0
+      REPOS_DIR: /app/data/repos
+      UPLOADS_DIR: /app/data/uploads
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Frontend — Next.js dev server with fast refresh
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      target: development
+    volumes:
+      - ../frontend:/app           # Mount source for fast refresh
+      - /app/node_modules          # Prevent host node_modules from leaking in
+      - /app/.next                 # Keep .next inside container
+    command: npm run dev
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+      WATCHPACK_POLLING: "true"    # Ensures file watching works in Docker
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure services — same as prod, no overrides needed
+  # ---------------------------------------------------------------------------
+  postgres:
+    restart: "no"
+
+  qdrant:
+    restart: "no"
+
+  redis:
+    restart: "no"
+
+volumes:
+  repo_data:
+    driver: local
