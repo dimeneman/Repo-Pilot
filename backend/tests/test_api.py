@@ -354,6 +354,47 @@ async def test_dispatch_direct_runner_mode(monkeypatch):
     assert runner == "direct"
 
 
+@pytest.mark.asyncio
+async def test_cors_vercel_origin(async_client: AsyncClient):
+    """Verify that requests from https://repo-pilot-steel.vercel.app are allowed with credentials."""
+    headers = {
+        "Origin": "https://repo-pilot-steel.vercel.app",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization,content-type",
+    }
+    # Preflight OPTIONS request
+    preflight = await async_client.options("/api/v1/health", headers=headers)
+    assert preflight.status_code == 200
+    assert preflight.headers.get("access-control-allow-origin") == "https://repo-pilot-steel.vercel.app"
+    assert preflight.headers.get("access-control-allow-credentials") == "true"
+    assert "POST" in preflight.headers.get("access-control-allow-methods", "")
+
+    # Normal GET request
+    resp = await async_client.get("/api/v1/health", headers={"Origin": "https://repo-pilot-steel.vercel.app"})
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "https://repo-pilot-steel.vercel.app"
+    assert resp.headers.get("access-control-allow-credentials") == "true"
+
+
+@pytest.mark.asyncio
+async def test_cors_localhost_origin(async_client: AsyncClient):
+    """Verify that local development requests from http://localhost:3000 work seamlessly."""
+    headers = {"Origin": "http://localhost:3000"}
+    resp = await async_client.get("/api/v1/health", headers=headers)
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:3000"
+    assert resp.headers.get("access-control-allow-credentials") == "true"
+
+
+@pytest.mark.asyncio
+async def test_cors_disallowed_origin(async_client: AsyncClient):
+    """Verify that unauthorized external origins do not receive allow-origin header."""
+    headers = {"Origin": "https://unauthorized-evil-domain.com"}
+    resp = await async_client.get("/api/v1/health", headers=headers)
+    assert resp.headers.get("access-control-allow-origin") is None
+
+
+
 
 
 

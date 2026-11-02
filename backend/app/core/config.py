@@ -25,6 +25,35 @@ class Settings(BaseSettings):
             return v.lower() in ("true", "1", "t", "yes", "y", "debug")
         return bool(v)
 
+    # ── CORS ──────────────────────────────────────────────────────────────
+    CORS_ORIGINS: Any = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://repo-pilot-steel.vercel.app",
+    ]
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v: Any) -> list[str]:
+        if isinstance(v, str):
+            v = v.strip()
+            if v.startswith("[") and v.endswith("]"):
+                import json
+                try:
+                    parsed = json.loads(v)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if item]
+                except Exception:
+                    pass
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        if isinstance(v, (list, tuple, set)):
+            return [str(item).strip() for item in v if item]
+        return [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "https://repo-pilot-steel.vercel.app",
+        ]
+
 
     # ── Database ──────────────────────────────────────────────────────────
     DATABASE_URL: str = (
