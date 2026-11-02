@@ -75,11 +75,13 @@ async def init_db() -> None:
     log.info("Creating database tables …")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Migrate new columns on existing jobs table if needed
+        # Migrate new columns on existing jobs and repositories tables if needed
         try:
             await conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS stage VARCHAR(50) DEFAULT 'pending';"))
             await conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();"))
             await conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS access_token VARCHAR(500);"))
+            await conn.execute(text("ALTER TABLE repositories ADD COLUMN IF NOT EXISTS session_id VARCHAR(100);"))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_repositories_session_id ON repositories (session_id);"))
         except Exception as mig_err:
             log.debug(f"Column migration check note: {mig_err}")
     log.info("Database tables created successfully.")

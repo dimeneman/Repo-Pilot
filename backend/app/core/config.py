@@ -35,24 +35,31 @@ class Settings(BaseSettings):
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def parse_cors_origins(cls, v: Any) -> list[str]:
+        default_origins = [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "https://repo-pilot-steel.vercel.app",
+        ]
         if isinstance(v, str):
             v = v.strip()
+            if v == "*":
+                # Wildcard with allow_credentials=True is rejected by browsers
+                return default_origins
             if v.startswith("[") and v.endswith("]"):
                 import json
                 try:
                     parsed = json.loads(v)
                     if isinstance(parsed, list):
-                        return [str(item).strip() for item in parsed if item]
+                        res = [str(item).strip() for item in parsed if item and str(item).strip() != "*"]
+                        return res or default_origins
                 except Exception:
                     pass
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
+            res = [origin.strip() for origin in v.split(",") if origin.strip() and origin.strip() != "*"]
+            return res or default_origins
         if isinstance(v, (list, tuple, set)):
-            return [str(item).strip() for item in v if item]
-        return [
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-            "https://repo-pilot-steel.vercel.app",
-        ]
+            res = [str(item).strip() for item in v if item and str(item).strip() != "*"]
+            return res or default_origins
+        return default_origins
 
 
     # ── Database ──────────────────────────────────────────────────────────

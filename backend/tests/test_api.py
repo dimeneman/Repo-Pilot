@@ -394,6 +394,86 @@ async def test_cors_disallowed_origin(async_client: AsyncClient):
     assert resp.headers.get("access-control-allow-origin") is None
 
 
+@pytest.mark.asyncio
+async def test_root_and_prefix_routes_with_cors(async_client: AsyncClient):
+    """Verify that both /api/v1/health and root /health support CORS and return 200."""
+    headers = {"Origin": "https://repo-pilot-steel.vercel.app"}
+
+    # Test /api/v1/health
+    resp_v1 = await async_client.get("/api/v1/health", headers=headers)
+    assert resp_v1.status_code == 200
+    assert resp_v1.headers.get("access-control-allow-origin") == "https://repo-pilot-steel.vercel.app"
+
+    # Test root /health (fallback for requests omitting /api/v1)
+    resp_root = await async_client.get("/health", headers=headers)
+    assert resp_root.status_code == 200
+    assert resp_root.headers.get("access-control-allow-origin") == "https://repo-pilot-steel.vercel.app"
+
+    # Test /auth/github/url at root
+    resp_auth = await async_client.get("/auth/github/url", headers=headers)
+    assert resp_auth.status_code == 200
+    assert resp_auth.headers.get("access-control-allow-origin") == "https://repo-pilot-steel.vercel.app"
+
+
+@pytest.mark.asyncio
+async def test_session_scoped_repository_listing(async_client: AsyncClient, db_session):
+    """Verify repositories are scoped to user demo sessions."""
+    from app.models.repository import Repository
+
+    # Create two repos with distinct session IDs
+    repo_s1 = Repository(
+        url="https://github.com/session-test/repo-1",
+        name="repo-1",
+        owner="session-test",
+        default_branch="main",
+        session_id="session-alpha",
+        status="ready",
+    )
+    repo_s2 = Repository(
+        url="https://github.com/session-test/repo-2",
+        name="repo-2",
+        owner="session-test",
+        default_branch="main",
+        session_id="session-beta",
+        status="ready",
+    )
+    db_session.add(repo_s1)
+    db_session.add(repo_s2)
+    await db_session.commit()
+
+    # Query with session-alpha -> should only return repo-1
+    res1 = await async_client.get("/api/v1/repos?session_id=session-alpha")
+    assert res1.status_code == 200
+    data1 = res1.json()
+    assert len(data1["repositories"]) == 1
+    assert data1["repositories"][0]["name"] == "repo-1"
+
+    # Query with session-beta -> should only return repo-2
+    res2 = await async_client.get("/api/v1/repos", headers={"X-Session-ID": "session-beta"})
+    assert res2.status_code == 200
+    data2 = res2.json()
+    assert len(data2["repositories"]) == 1
+    assert data2["repositories"][0]["name"] == "repo-2"
+
+    # Query with a fresh new session -> should return empty list (refresh behavior)
+    res_fresh = await async_client.get("/api/v1/repos?session_id=sess_new_fresh_123")
+    assert res_fresh.status_code == 200
+    assert len(res_fresh.json()["repositories"]) == 0
+
+    # Test clear session endpoint
+    del_res = await async_client.delete("/api/v1/repos/session/clear?session_id=session-alpha")
+    assert del_res.status_code == 200
+    assert del_res.json()["cleared"] == 1
+
+    # Verify session-alpha is now empty, but session-beta still exists
+    res1_after = await async_client.get("/api/v1/repos?session_id=session-alpha")
+    assert len(res1_after.json()["repositories"]) == 0
+    res2_after = await async_client.get("/api/v1/repos?session_id=session-beta")
+    assert len(res2_after.json()["repositories"]) == 1
+
+
+
+
 
 
 

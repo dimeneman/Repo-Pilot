@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { auth, type GitHubUser } from "@/lib/api";
+import { preserveSessionForOAuth } from "@/lib/session";
 
 const TOKEN_KEY = "repopilot_github_token";
 const USER_KEY = "repopilot_github_user";
@@ -65,6 +66,7 @@ export function useGitHubAuth() {
 
         const res = await auth.getGitHubUrl(callback);
         if (res.configured && res.url) {
+          preserveSessionForOAuth();
           window.location.href = res.url;
           return { configured: true, url: res.url };
         } else {

@@ -154,10 +154,33 @@ export class ApiError extends Error {
   }
 }
 
+import { getSessionId } from "./session";
+
 // ─── Base URL ────────────────────────────────────────────────────────────────
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+/**
+ * Normalizes the backend base URL.
+ * Ensures the API base always ends with /api/v1 without trailing slashes.
+ * Works seamlessly whether NEXT_PUBLIC_API_URL is:
+ *   - "https://repo-pilot-backend-i3wm.onrender.com"
+ *   - "https://repo-pilot-backend-i3wm.onrender.com/"
+ *   - "https://repo-pilot-backend-i3wm.onrender.com/api/v1"
+ *   - "http://localhost:8000/api/v1"
+ *   - undefined / empty (defaults to "http://localhost:8000/api/v1")
+ */
+export function getApiBaseUrl(): string {
+  const envUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
+  const raw = envUrl || "http://localhost:8000/api/v1";
+  const clean = raw.replace(/\/+$/, "");
+
+  if (clean.endsWith("/api/v1")) {
+    return clean;
+  }
+  return `${clean}/api/v1`;
+}
+
+// Backward-compatible alias for any code importing API_BASE
+export const API_BASE = getApiBaseUrl();
 
 // ─── Core Fetch Wrapper ─────────────────────────────────────────────────────
 
@@ -169,15 +192,27 @@ async function fetchApi<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = `${API_BASE}${path}`;
+  const base = getApiBaseUrl();
+  let cleanPath = path.startsWith("/") ? path : `/${path}`;
+
+  // Prevent duplicate /api/v1 if the path already starts with /api/v1
+  if (cleanPath.startsWith("/api/v1/")) {
+    cleanPath = cleanPath.slice("/api/v1".length);
+  } else if (cleanPath === "/api/v1") {
+    cleanPath = "";
+  }
+
+  const url = `${base}${cleanPath}`;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    "X-Session-ID": getSessionId(),
     ...(options.headers as Record<string, string>),
   };
 
   const response = await fetch(url, {
     ...options,
+    credentials: options.credentials || "include",
     headers,
   });
 
@@ -202,11 +237,12 @@ async function fetchApi<T>(
 // ─── Repository Endpoints ───────────────────────────────────────────────────
 
 export const repos = {
-  /** Ingest (clone + index) a GitHub repository. */
+  /** Ingest (clone + index) a GitHub repository, binding it to the current demo session. */
   ingest: (
     url: string,
     branch?: string,
-    accessToken?: string
+    accessToken?: string,
+    sessionId?: string
   ): Promise<RepoResponse> =>
     fetchApi<RepoResponse>("/repos/ingest", {
       method: "POST",
@@ -214,12 +250,23 @@ export const repos = {
         url,
         branch: branch || undefined,
         access_token: accessToken || undefined,
+        session_id: sessionId || getSessionId(),
       }),
     }),
 
-  /** List all indexed repositories. */
-  list: (): Promise<RepoListResponse> =>
-    fetchApi<RepoListResponse>("/repos"),
+  /** List indexed repositories scoped to the active session. */
+  list: (sessionId?: string): Promise<RepoListResponse> => {
+    const sid = sessionId || getSessionId();
+    const query = sid ? `?session_id=${encodeURIComponent(sid)}` : "";
+    return fetchApi<RepoListResponse>(`/repos${query}`);
+  },
+
+  /** Clear all repositories for the active session. */
+  clearSession: (sessionId?: string): Promise<{ cleared: number }> => {
+    const sid = sessionId || getSessionId();
+    const query = sid ? `?session_id=${encodeURIComponent(sid)}` : "";
+    return fetchApi<{ cleared: number }>(`/repos/session/clear${query}`, { method: "DELETE" });
+  },
 
   /** Get the current ingestion status for a repository. */
   getStatus: (id: string): Promise<RepoStatusResponse> =>
@@ -235,8 +282,11 @@ export const repos = {
 
 
   /** Re-index an already-ingested repository. */
-  reindex: (id: string): Promise<RepoResponse> =>
-    fetchApi<RepoResponse>(`/repos/${id}/reindex`, { method: "POST" }),
+  reindex: (id: string, sessionId?: string): Promise<RepoResponse> => {
+    const sid = sessionId || getSessionId();
+    const query = sid ? `?session_id=${encodeURIComponent(sid)}` : "";
+    return fetchApi<RepoResponse>(`/repos/${id}/reindex${query}`, { method: "POST" });
+  },
 
   /** Delete a repository and all its data. */
   delete: (id: string): Promise<{ message: string }> =>

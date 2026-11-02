@@ -1,6 +1,7 @@
 "use client";
 
 import useSWR from "swr";
+import { getSessionId } from "@/lib/session";
 import {
   repos,
   type RepoResponse,
@@ -19,13 +20,14 @@ import {
 // ─── All Repositories ───────────────────────────────────────────────────────
 
 /**
- * Fetch and cache the list of all repositories.
- * Auto-refreshes every 30 seconds to pick up new repos.
+ * Fetch and cache the list of repositories for the active demo session.
+ * Auto-refreshes every 30 seconds to pick up newly indexed repos.
  */
 export function useRepos() {
+  const sessionId = typeof window !== "undefined" ? getSessionId() : "init";
   const { data, error, isLoading, mutate } = useSWR<RepoListResponse>(
-    "/repos",
-    () => repos.list(),
+    `/repos?session_id=${sessionId}`,
+    () => repos.list(sessionId),
     {
       refreshInterval: 30_000,
       revalidateOnFocus: true,
@@ -45,13 +47,13 @@ export function useRepos() {
 // ─── Single Repository ─────────────────────────────────────────────────────
 
 /**
- * Fetch a single repository by ID from the list.
- * Uses the repos list endpoint and filters client-side.
+ * Fetch a single repository by ID from the active session.
  */
 export function useRepo(id: string | null) {
+  const sessionId = typeof window !== "undefined" ? getSessionId() : "init";
   const { data, error, isLoading, mutate } = useSWR<RepoListResponse>(
-    id ? `/repos?for=${id}` : null,
-    () => repos.list(),
+    id ? `/repos?for=${id}&session_id=${sessionId}` : null,
+    () => repos.list(sessionId),
     {
       refreshInterval: 10_000,
     }

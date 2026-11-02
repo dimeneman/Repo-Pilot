@@ -8,7 +8,7 @@ import re
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import selectinload
 
@@ -59,12 +59,15 @@ async def ingest_repository(
     payload: RepoIngestRequest,
     db: DBSession,
     user: CurrentUser,
+    session_id: Optional[str] = Query(None),
+    x_session_id: Optional[str] = Header(None, alias="X-Session-ID"),
 ) -> RepoResponse:
     """Accept a GitHub URL, create a repository and job record, and enqueue
     for background worker processing.
 
     Returns immediately with status ``pending`` and the created ``job_id``.
     """
+    effective_session = payload.session_id or session_id or x_session_id
     owner, name = _parse_github_url(payload.url)
 
     # Check for duplicates
@@ -79,6 +82,8 @@ async def ingest_repository(
         repo = existing
         repo.status = "pending"
         repo.error_message = None
+        if effective_session:
+            repo.session_id = effective_session
         if payload.branch:
             repo.default_branch = payload.branch
         await db.commit()
@@ -90,6 +95,7 @@ async def ingest_repository(
             owner=owner,
             default_branch=payload.branch,
             status="pending",
+            session_id=effective_session,
         )
         db.add(repo)
         await db.commit()
@@ -148,14 +154,26 @@ async def ingest_repository(
 async def list_repositories(
     db: DBSession,
     pagination: Pagination,
+    session_id: Optional[str] = Query(None, description="Optional session ID to scope repository listing"),
+    x_session_id: Optional[str] = Header(None, alias="X-Session-ID"),
 ) -> RepoListResponse:
-    """Return a paginated list of all tracked repositories."""
-    total_result = await db.execute(select(func.count(Repository.id)))
+    """Return a paginated list of repositories.
+    If a session ID is provided, scopes the listing strictly to repositories created in that session.
+    """
+    effective_session = session_id or x_session_id
+
+    stmt = select(Repository)
+    count_stmt = select(func.count(Repository.id))
+
+    if effective_session:
+        stmt = stmt.where(Repository.session_id == effective_session)
+        count_stmt = count_stmt.where(Repository.session_id == effective_session)
+
+    total_result = await db.execute(count_stmt)
     total = total_result.scalar_one()
 
     result = await db.execute(
-        select(Repository)
-        .order_by(Repository.created_at.desc())
+        stmt.order_by(Repository.created_at.desc())
         .offset(pagination.skip)
         .limit(pagination.limit)
     )
@@ -244,6 +262,8 @@ async def reindex_repository(
     repo_id: uuid.UUID,
     db: DBSession,
     user: CurrentUser,
+    session_id: Optional[str] = Query(None),
+    x_session_id: Optional[str] = Header(None, alias="X-Session-ID"),
 ) -> RepoResponse:
     """Re-index an already-ingested repository in the background worker."""
     repo = await db.get(Repository, repo_id)
@@ -252,6 +272,10 @@ async def reindex_repository(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Repository {repo_id} not found.",
         )
+
+    effective_session = session_id or x_session_id
+    if effective_session:
+        repo.session_id = effective_session
 
     repo.status = "pending"
     await db.commit()
@@ -296,6 +320,36 @@ async def reindex_repository(
     resp = RepoResponse.model_validate(repo)
     resp.job_id = job.id
     return resp
+
+
+@router.delete(
+    "/session/clear",
+    summary="Clear all repositories belonging to the active session",
+)
+async def clear_session_repositories(
+    db: DBSession,
+    session_id: Optional[str] = Query(None),
+    x_session_id: Optional[str] = Header(None, alias="X-Session-ID"),
+    vector_store: VectorStoreDep = None,
+) -> dict:
+    effective_session = session_id or x_session_id
+    if not effective_session:
+        return {"cleared": 0, "message": "No session ID provided"}
+
+    stmt = select(Repository).where(Repository.session_id == effective_session)
+    result = await db.execute(stmt)
+    repos = result.scalars().all()
+    count = 0
+    for r in repos:
+        if vector_store:
+            try:
+                await vector_store.delete_by_repo(str(r.id))
+            except Exception:
+                pass
+        await db.delete(r)
+        count += 1
+    await db.commit()
+    return {"cleared": count, "session_id": effective_session}
 
 
 @router.delete(

@@ -33,6 +33,11 @@ class RepoIngestRequest(BaseModel):
         default=None,
         description="Optional GitHub personal access token or OAuth token for authentication / private repo cloning.",
     )
+    session_id: Optional[str] = Field(
+        default=None,
+        max_length=100,
+        description="Optional demo session ID to scope repository to current user session.",
+    )
 
     @field_validator("url")
     @classmethod
@@ -68,6 +73,7 @@ class RepoResponse(BaseModel):
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    session_id: Optional[str] = None
     job_id: Optional[UUID] = None
 
 

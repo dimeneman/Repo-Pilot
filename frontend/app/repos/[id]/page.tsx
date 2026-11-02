@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   MessageSquare,
   FileText,
@@ -21,6 +21,7 @@ import { StatusPoller } from "@/components/status-poller";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 export default function RepoDetailPage() {
+  const router = useRouter();
   const params = useParams();
   const repoId = params?.id as string;
 
@@ -46,14 +47,24 @@ export default function RepoDetailPage() {
   if (!repo) {
     return (
       <div className="flex h-full items-center justify-center bg-zinc-950 p-6">
-        <div className="text-center space-y-3 max-w-sm">
-          <div className="w-12 h-12 rounded-xl bg-red-950/60 border border-red-800/50 flex items-center justify-center text-red-400 mx-auto">
+        <div className="text-center space-y-4 max-w-sm">
+          <div className="w-12 h-12 rounded-xl bg-amber-950/60 border border-amber-800/50 flex items-center justify-center text-amber-400 mx-auto">
             <AlertTriangle className="w-6 h-6" />
           </div>
-          <h3 className="text-base font-semibold text-zinc-100">Repository Not Found</h3>
-          <p className="text-xs text-zinc-400">
-            The repository ID &ldquo;{repoId}&rdquo; does not exist or may have been deleted.
-          </p>
+          <div className="space-y-1">
+            <h3 className="text-base font-semibold text-zinc-100">Session Ended or Not Found</h3>
+            <p className="text-xs text-zinc-400">
+              RepoPilot operates as a session-only demo app. Refreshing or reopening starts a fresh session.
+            </p>
+          </div>
+          <Button
+            onClick={() => router.push("/")}
+            variant="default"
+            size="sm"
+            className="text-xs"
+          >
+            Start New Session
+          </Button>
         </div>
       </div>
     );

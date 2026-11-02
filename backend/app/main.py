@@ -52,6 +52,15 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"Failed to reconcile stale jobs on startup: {exc}")
 
+    # Clean up stale session demo repositories on startup
+    try:
+        from app.db.session import async_session_factory
+        from app.services.cleanup import cleanup_stale_sessions
+        async with async_session_factory() as session:
+            await cleanup_stale_sessions(session, max_age_hours=12)
+    except Exception as exc:
+        logger.warning(f"Failed to clean up stale sessions on startup: {exc}")
+
     # Optional embedded background worker for single-process local development
     worker_task = None
     if settings.RUN_EMBEDDED_WORKER:
@@ -99,10 +108,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Mount all API routes under API prefix
 app.include_router(api_router, prefix=settings.API_PREFIX)
+
+# Also mount router at root so paths like /repos, /auth/github/url, /chat work seamlessly
+if settings.API_PREFIX:
+    app.include_router(api_router, include_in_schema=False)
 
 
 @app.get("/", include_in_schema=False)

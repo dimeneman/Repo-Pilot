@@ -34,6 +34,7 @@ class Repository(Base):
     owner: Mapped[str] = mapped_column(String(255), nullable=False)
     default_branch: Mapped[str] = mapped_column(String(100), default="main")
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    session_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
 
     # Ingestion lifecycle: pending → cloning → parsing → indexing → ready | failed
     status: Mapped[str] = mapped_column(String(50), default="pending")
