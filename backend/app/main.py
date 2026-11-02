@@ -3,9 +3,9 @@ RepoPilot — Main FastAPI application entrypoint.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +19,26 @@ from app.retrieval.vector_store import VectorStoreService
 
 logger = get_logger("repopilot")
 
+
+def _build_cors_origins() -> list[str]:
+    """Build the list of allowed CORS origins.
+
+    Uses any configured origins from settings and always includes the
+    localhost and Vercel frontend origins needed for local and production.
+    """
+    origins = list(settings.CORS_ORIGINS)
+
+    default_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://repo-pilot-steel.vercel.app",
+    ]
+
+    for origin in default_origins:
+        if origin not in origins:
+            origins.append(origin)
+
+    return origins
 
 
 @asynccontextmanager
@@ -48,6 +68,7 @@ async def lifespan(app: FastAPI):
     # Reset any stale active jobs from previous crashes or container restarts
     try:
         from app.workers.ingestion_worker import IngestionWorker
+
         await IngestionWorker().reconcile_stale_jobs()
     except Exception as exc:
         logger.warning(f"Failed to reconcile stale jobs on startup: {exc}")
@@ -56,6 +77,7 @@ async def lifespan(app: FastAPI):
     try:
         from app.db.session import async_session_factory
         from app.services.cleanup import cleanup_stale_sessions
+
         async with async_session_factory() as session:
             await cleanup_stale_sessions(session, max_age_hours=12)
     except Exception as exc:
@@ -64,8 +86,8 @@ async def lifespan(app: FastAPI):
     # Optional embedded background worker for single-process local development
     worker_task = None
     if settings.RUN_EMBEDDED_WORKER:
-        import asyncio
         from app.worker import run_worker_loop
+
         logger.info("Starting embedded background worker task...")
         worker_task = asyncio.create_task(run_worker_loop())
 
@@ -92,19 +114,9 @@ app = FastAPI(
 )
 
 # Configure CORS
-origins = list(settings.CORS_ORIGINS)
-for default_origin in [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://repo-pilot-steel.vercel.app",
-]:
-    if default_origin not in origins:
-        origins.append(default_origin)
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origins=_build_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
