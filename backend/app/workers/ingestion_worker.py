@@ -48,18 +48,22 @@ class IngestionWorker:
         self.embedding_service = embedding_service or EmbeddingService()
         self.vector_store = vector_store or VectorStoreService()
 
-    async def reconcile_stale_jobs(self) -> None:
-        """Reset any stale jobs that were running when the process previously terminated."""
+    async def reconcile_stale_jobs(self, timeout_minutes: int = 30) -> None:
+        """Reset any abandoned jobs that have had no updates for longer than timeout_minutes."""
         async with async_session_factory() as db:
             try:
-                # Mark orphaned running jobs as failed
+                cutoff = datetime.datetime.now(timezone.utc) - datetime.timedelta(minutes=timeout_minutes)
+                # Mark orphaned running jobs that haven't updated within the timeout window as failed
                 await db.execute(
                     update(Job)
-                    .where(Job.status == "running")
+                    .where(
+                        Job.status == "running",
+                        Job.updated_at < cutoff,
+                    )
                     .values(
                         status="failed",
                         stage="failed",
-                        error_message="Ingestion interrupted by worker restart. Safe to retry.",
+                        error_message="Ingestion timed out or interrupted. Safe to retry.",
                         completed_at=datetime.datetime.now(timezone.utc),
                         updated_at=datetime.datetime.now(timezone.utc),
                     )
@@ -67,10 +71,13 @@ class IngestionWorker:
                 # Reconcile corresponding repositories
                 await db.execute(
                     update(Repository)
-                    .where(Repository.status.in_(["cloning", "parsing", "indexing"]))
+                    .where(
+                        Repository.status.in_(["cloning", "parsing", "indexing"]),
+                        Repository.updated_at < cutoff,
+                    )
                     .values(
                         status="failed",
-                        error_message="Ingestion interrupted by worker restart. Please re-index.",
+                        error_message="Ingestion timed out or interrupted. Please re-index.",
                         updated_at=datetime.datetime.now(timezone.utc),
                     )
                 )
@@ -153,7 +160,8 @@ class IngestionWorker:
                 job.updated_at = datetime.datetime.now(timezone.utc)
                 await db.commit()
 
-                # Clean up existing files and vectors for this repo (for re-index or retry)
+                # Clean up existing chunks, files and vectors for this repo (for re-index or retry)
+                await db.execute(delete(Chunk).where(Chunk.repo_id == repo.id))
                 await db.execute(delete(File).where(File.repo_id == repo.id))
                 await db.commit()
                 try:
@@ -301,6 +309,13 @@ class IngestionWorker:
                 job.completed_at = datetime.datetime.now(timezone.utc)
                 job.updated_at = datetime.datetime.now(timezone.utc)
                 await db.commit()
+            finally:
+                if repo_dir and Path(repo_dir).exists():
+                    try:
+                        shutil.rmtree(repo_dir, ignore_errors=True)
+                        logger.debug(f"Purged temporary cloned folder: {repo_dir}")
+                    except Exception as clean_exc:
+                        logger.debug(f"Could not purge temporary folder {repo_dir}: {clean_exc}")
 
     async def run_ingestion(self, repo_id_str: str, access_token: Optional[str] = None) -> None:
         """Backward-compatible entry point: creates or fetches a Job and executes it."""

@@ -163,5 +163,162 @@ async def test_reindex_endpoint_creates_job(async_client: AsyncClient, sample_re
     assert job_data["status"] == "pending"
 
 
+@pytest.mark.asyncio
+async def test_patch_job_status(async_client: AsyncClient, sample_repo: Repository):
+    """Verify external runners can update job progress via PATCH /api/v1/jobs/{id}."""
+    # First create a job via reindex
+    reindex_resp = await async_client.post(f"/api/v1/repos/{sample_repo.id}/reindex")
+    job_id = reindex_resp.json()["job_id"]
+
+    # External runner reports cloning stage
+    patch_payload = {
+        "status": "running",
+        "stage": "cloning",
+        "progress": 0.25,
+        "step_description": "Cloning repository in GitHub Actions",
+    }
+    patch_resp = await async_client.patch(f"/api/v1/jobs/{job_id}", json=patch_payload)
+    assert patch_resp.status_code == 200
+    patch_data = patch_resp.json()
+    assert patch_data["status"] == "running"
+    assert patch_data["stage"] == "cloning"
+    assert patch_data["progress"] == 0.25
+    assert patch_data["step_description"] == "Cloning repository in GitHub Actions"
+
+    # External runner reports completed
+    complete_payload = {
+        "status": "completed",
+        "stage": "done",
+        "progress": 1.0,
+        "step_description": "Indexed successfully in runner",
+    }
+    complete_resp = await async_client.patch(f"/api/v1/jobs/{job_id}", json=complete_payload)
+    assert complete_resp.status_code == 200
+    assert complete_resp.json()["status"] == "completed"
+
+    # Verify repository status became ready
+    status_resp = await async_client.get(f"/api/v1/repos/{sample_repo.id}/status")
+    assert status_resp.json()["status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_github_actions_service_dispatch(monkeypatch):
+    """Verify GitHub Actions repository_dispatch call with proper headers and payload."""
+    import httpx
+    from app.services.github_actions import GitHubActionsService
+
+    service = GitHubActionsService(
+        token="ghp_testtoken123",
+        owner="dimeneman",
+        repo="Repo-Pilot",
+        event_type="ingest_repo",
+    )
+    assert service.is_configured is True
+
+    captured_request = {}
+
+    async def mock_post(self, url, headers=None, json=None):
+        captured_request["url"] = url
+        captured_request["headers"] = headers
+        captured_request["json"] = json
+        return httpx.Response(status_code=204)
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    success = await service.dispatch_ingest_job(
+        job_id="test-job-id",
+        repo_id="test-repo-id",
+        repo_url="https://github.com/octocat/Hello-World",
+        branch="main",
+    )
+    assert success is True
+    assert "https://api.github.com/repos/dimeneman/Repo-Pilot/dispatches" in captured_request["url"]
+    assert captured_request["headers"]["Authorization"] == "Bearer ghp_testtoken123"
+    assert captured_request["json"]["event_type"] == "ingest_repo"
+    assert captured_request["json"]["client_payload"]["job_id"] == "test-job-id"
+
+
+@pytest.mark.asyncio
+async def test_github_actions_service_error_handling(monkeypatch):
+    """Verify GitHub Actions dispatch raises RuntimeError on non-204 responses."""
+    import httpx
+    from app.services.github_actions import GitHubActionsService
+
+    service = GitHubActionsService(
+        token="ghp_invalid",
+        owner="dimeneman",
+        repo="Repo-Pilot",
+    )
+
+    async def mock_post_err(self, url, headers=None, json=None):
+        return httpx.Response(status_code=401, text='{"message":"Bad credentials"}')
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post_err)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await service.dispatch_ingest_job(
+            job_id="test-job-id",
+            repo_id="test-repo-id",
+            repo_url="https://github.com/octocat/Hello-World",
+        )
+    assert "401" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_ingestion_job_routing(monkeypatch):
+    """Verify dispatch_ingestion_job falls back to local queue when token is absent."""
+    from app.services.ingestion import dispatch_ingestion_job
+    from app.core.config import settings
+
+    # In local/auto mode without GITHUB_ACTIONS_TOKEN
+    monkeypatch.setattr(settings, "GITHUB_ACTIONS_TOKEN", None)
+    monkeypatch.setattr(settings, "INGESTION_RUNNER", "auto")
+
+    runner = await dispatch_ingestion_job(
+        job_id="job-123",
+        repo_id="repo-123",
+        repo_url="https://github.com/test/repo",
+    )
+    assert runner == "local"
+
+    # When GITHUB_ACTIONS_TOKEN is present
+    monkeypatch.setattr(settings, "GITHUB_ACTIONS_TOKEN", "ghp_valid")
+    import httpx
+    async def mock_ok_post(self, url, headers=None, json=None):
+        return httpx.Response(status_code=204)
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_ok_post)
+
+    runner2 = await dispatch_ingestion_job(
+        job_id="job-456",
+        repo_id="repo-456",
+        repo_url="https://github.com/test/repo",
+    )
+    assert runner2 == "github_actions"
+
+
+@pytest.mark.asyncio
+async def test_worker_execute_fail_job(async_client: AsyncClient, sample_repo: Repository, db_session):
+    """Verify execute_fail_job records failure in database."""
+    from app.worker import execute_fail_job
+    # Create job
+    reindex_resp = await async_client.post(f"/api/v1/repos/{sample_repo.id}/reindex")
+    job_id = reindex_resp.json()["job_id"]
+
+    # Call execute_fail_job with test db session
+    await execute_fail_job(job_id, "Runner timed out or crashed", db_session=db_session)
+
+    # Check status
+    job_resp = await async_client.get(f"/api/v1/jobs/{job_id}")
+    job_data = job_resp.json()
+    assert job_data["status"] == "failed"
+    assert job_data["stage"] == "failed"
+    assert "Runner timed out" in job_data["error_message"]
+
+    repo_resp = await async_client.get(f"/api/v1/repos/{sample_repo.id}/status")
+    assert repo_resp.json()["status"] == "failed"
+
+
+
+
 
 

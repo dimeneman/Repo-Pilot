@@ -32,13 +32,14 @@ graph LR
     User["🧑‍💻 Web UI"] --> FE["⚛️ Next.js Frontend"]
     FE --> API["⚡ FastAPI Backend"]
     API --> PG[("🐘 PostgreSQL")]
-    API --> Redis[("⚡ Redis Queue")]
-    Worker["⚙️ Background Worker"] --> Redis
-    Worker --> PG
-    Worker --> QD[("🔮 Qdrant")]
+    API -->|repository_dispatch| GHA["🐙 GitHub Actions Runner (Zero-Cost Production)"]
+    API -->|Local fallback| LocalWorker["⚙️ Local Worker / Daemon"]
+    GHA --> PG
+    GHA --> QD[("🔮 Qdrant")]
+    LocalWorker --> PG
+    LocalWorker --> QD
     API --> QD
     API --> LLM{"🤖 Google Gemini"}
-    Worker --> GH["🐙 GitHub API"]
 ```
 
 ### Data Flow
@@ -46,28 +47,25 @@ graph LR
 ```mermaid
 flowchart TD
     A[User submits GitHub URL] --> B[API creates pending Job]
-    B --> C[Push Job to Queue / DB]
-    C --> D[Return 202 Accepted with job_id]
+    B --> C{Production or Local?}
+    C -->|Production / GHA Configured| D[Trigger GitHub Actions via repository_dispatch]
+    C -->|Local Development| E[Enqueue to local worker daemon]
+    B --> F[Return 202 Accepted immediately with job_id]
     
-    subgraph Background Worker
-        E[Worker dequeues Job] --> F[Clone / Pull Repository]
-        F --> G[Parse & Filter Files]
-        G --> H[Chunk Source Code]
-        H --> I[Generate Embeddings]
-        I --> J[Store in Qdrant Vector Store]
-        G --> K[Extract & Store Metadata in PostgreSQL]
-        J --> L[Update Job & Repo status to completed]
+    subgraph GitHub Actions or Local Worker
+        G[Worker checks out & runs ingestion] --> H[Clone Repository]
+        H --> I[Parse & Filter Files]
+        I --> J[Chunk Source Code]
+        J --> K[Generate Embeddings]
+        K --> L[Store in Qdrant Vector Store]
+        I --> M[Store Metadata in PostgreSQL]
+        L --> N[Update Job & Repo status: ready / failed]
     end
     
-    C -.-> E
+    D -.-> G
+    E -.-> G
     
-    M[User asks question] --> N[Embed Query]
-    N --> O[Hybrid Search: Semantic + BM25]
-    O --> P[Rerank Results]
-    P --> Q[Build Prompt with Context]
-    Q --> R[LLM Generates Answer]
-    R --> S[Attach Source Citations]
-    S --> T[Return to User]
+    O[Frontend polls status] --> P[Render live progress & stage]
 ```
 
 ---
@@ -158,14 +156,37 @@ npm install
 npm run dev
 ```
 
-### Production Architecture (e.g. Render)
+### Production Architecture (Zero-Cost Render + GitHub Actions)
 
-To prevent HTTP request timeouts during repo cloning, parsing, and vector embeddings, RepoPilot runs ingestion as a background job:
-- **API Web Service**: Validates requests, writes a pending `Job` record to the database, publishes the job ID, and returns `202 Accepted` immediately.
-- **Worker Daemon**: Runs `python -m app.worker`, dequeues tasks via Redis (or resilient DB polling fallback), executes cloning/parsing/embedding/Qdrant writes, and updates progress in real time.
-- **Render Setup**:
-  - **Web Service**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-  - **Background Worker**: `python -m app.worker` (shares the same database and Qdrant environment variables)
+In production on Render's free tier, heavy background worker containers can incur cost or get killed due to timeouts. RepoPilot uses **GitHub Actions as a zero-cost background runner**:
+
+1. **FastAPI Web Service (Render Free Tier)**:
+   - Receives `/repos/ingest` or `/repos/{id}/reindex`.
+   - Validates the request, creates a durable `Job` record in PostgreSQL with `status="pending"`, and immediately returns `202 Accepted` with `job_id`.
+   - Dispatches a `repository_dispatch` event (`ingest_repo`) to GitHub Actions via the GitHub REST API.
+2. **GitHub Actions Runner (`.github/workflows/ingest.yml`)**:
+   - Woken up automatically by the `ingest_repo` event.
+   - Runs `python -m app.worker run-job --job-id <UUID>` on GitHub's free runners.
+   - Connects directly to PostgreSQL (via Render External Database URL) and Qdrant Cloud.
+   - Updates `job.stage` and `job.progress` in PostgreSQL at each step (`cloning` → `parsing` → `chunking` → `embeddings` → `indexing` → `done`).
+   - If an error occurs, records durable failure status so the user can retry.
+3. **Frontend Polling**:
+   - Polls `/api/v1/repos/{id}/status` on Render and renders live progress smoothly.
+
+#### Required GitHub Secrets for GitHub Actions:
+In your GitHub Repository → **Settings** → **Secrets and variables** → **Actions**, add:
+- `DATABASE_URL`: PostgreSQL connection string (Render External Connection String)
+- `QDRANT_HOST`: Qdrant Cloud URL (`https://...` or IP)
+- `QDRANT_PORT`: `6333`
+- `QDRANT_API_KEY`: Qdrant Cloud API Key
+- `GEMINI_API_KEY`: Google Gemini API Key
+
+#### Required Render Environment Variables:
+In your Render Web Service dashboard, add:
+- `GITHUB_ACTIONS_TOKEN`: Personal Access Token with `repo` or `contents:write` scope to dispatch workflows.
+- `GITHUB_REPO_OWNER`: Your GitHub username (e.g. `dimeneman`)
+- `GITHUB_REPO_NAME`: Your RepoPilot repo (e.g. `Repo-Pilot`)
+- `INGESTION_RUNNER`: `auto` (or `github_actions`)
 
 ### Running Tests
 
@@ -215,6 +236,11 @@ All settings are controlled via environment variables. See [`.env.example`](.env
 | `CHUNK_OVERLAP` | `200` | Overlap between chunks |
 | `MAX_FILE_SIZE_KB` | `500` | Skip files larger than this |
 | `SECRET_KEY` | — | JWT signing key |
+| `INGESTION_RUNNER` | `auto` | Runner strategy: `auto` (uses GitHub Actions if configured, else local), `github_actions`, or `local` |
+| `GITHUB_ACTIONS_TOKEN` | — | (Optional) GitHub Personal Access Token (`repo` scope) to dispatch GitHub Actions |
+| `GITHUB_REPO_OWNER` | `dimeneman` | Target GitHub repository owner for Actions dispatch |
+| `GITHUB_REPO_NAME` | `Repo-Pilot` | Target GitHub repository name for Actions dispatch |
+| `GITHUB_WORKFLOW_EVENT_TYPE` | `ingest_repo` | `repository_dispatch` event type |
 | `RUN_EMBEDDED_WORKER` | `false` | When `true`, runs background worker task inside web process for local dev |
 | `WORKER_POLL_INTERVAL` | `2.0` | Polling interval in seconds for background worker queue |
 | `GITHUB_CLIENT_ID` | — | (Optional) GitHub OAuth App Client ID |

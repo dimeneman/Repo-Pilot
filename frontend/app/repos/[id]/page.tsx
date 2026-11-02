@@ -8,8 +8,11 @@ import {
   FolderTree,
   Loader2,
   AlertTriangle,
+  RefreshCw,
 } from "lucide-react";
 import { useRepo, useRepoFiles, useRepoSummary } from "@/hooks/use-repos";
+import { repos } from "@/lib/api";
+import { Button } from "@/components/ui/button";
 import { Header } from "@/components/header";
 import { ChatInterface } from "@/components/chat-interface";
 import { RepoSummaryView } from "@/components/repo-summary";
@@ -74,12 +77,30 @@ export default function RepoDetailPage() {
 
       {/* Failure banner */}
       {repo.status === "failed" && (
-        <div className="m-6 p-4 rounded-xl bg-red-950/40 border border-red-900/60 text-red-300 text-xs flex items-center gap-3">
-          <AlertTriangle className="w-5 h-5 flex-shrink-0" />
-          <div>
-            <div className="font-semibold">Ingestion Failed</div>
-            <div className="text-red-400/90 mt-0.5">{repo.error_message || "An error occurred during repository indexing."}</div>
+        <div className="m-6 p-4 rounded-xl bg-red-950/40 border border-red-900/60 text-red-300 text-xs flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold">Ingestion Failed</div>
+              <div className="text-red-400/90 mt-0.5">{repo.error_message || "An error occurred during repository indexing."}</div>
+            </div>
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={async () => {
+              try {
+                await repos.reindex(repo.id);
+                mutate();
+              } catch (e: any) {
+                alert("Failed to retry ingestion: " + (e?.message || e));
+              }
+            }}
+            className="border-red-800/80 hover:bg-red-900/50 text-red-200 text-xs shrink-0 gap-1.5"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Retry Ingestion
+          </Button>
         </div>
       )}
 

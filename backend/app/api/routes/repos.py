@@ -132,8 +132,28 @@ async def ingest_repository(
 
     log.info(f"Created repository {repo.id} and job {job.id} for {payload.url}")
 
-    from app.workers.queue import enqueue_job
-    await enqueue_job(str(job.id), str(repo.id), payload.access_token)
+    try:
+        from app.services.ingestion import dispatch_ingestion_job
+        runner = await dispatch_ingestion_job(
+            job_id=str(job.id),
+            repo_id=str(repo.id),
+            repo_url=payload.url,
+            branch=payload.branch,
+            access_token=payload.access_token,
+        )
+        if runner == "github_actions":
+            job.step_description = "Dispatched to GitHub Actions runner"
+        else:
+            job.step_description = "Queued in local background worker"
+        await db.commit()
+    except Exception as exc:
+        log.error(f"Failed to dispatch ingestion job {job.id}: {exc}")
+        job.status = "failed"
+        job.stage = "failed"
+        job.error_message = f"Failed to dispatch ingestion: {exc}"
+        repo.status = "failed"
+        repo.error_message = str(exc)
+        await db.commit()
 
     resp = RepoResponse.model_validate(repo)
     resp.job_id = job.id
@@ -271,8 +291,27 @@ async def reindex_repository(
 
     log.info(f"Created reindex job {job.id} for repo {repo.id}")
 
-    from app.workers.queue import enqueue_job
-    await enqueue_job(str(job.id), str(repo.id))
+    try:
+        from app.services.ingestion import dispatch_ingestion_job
+        runner = await dispatch_ingestion_job(
+            job_id=str(job.id),
+            repo_id=str(repo.id),
+            repo_url=repo.url,
+            branch=repo.default_branch or "main",
+        )
+        if runner == "github_actions":
+            job.step_description = "Dispatched to GitHub Actions runner"
+        else:
+            job.step_description = "Queued in local background worker"
+        await db.commit()
+    except Exception as exc:
+        log.error(f"Failed to dispatch reindex job {job.id}: {exc}")
+        job.status = "failed"
+        job.stage = "failed"
+        job.error_message = f"Failed to dispatch reindexing: {exc}"
+        repo.status = "failed"
+        repo.error_message = str(exc)
+        await db.commit()
 
     resp = RepoResponse.model_validate(repo)
     resp.job_id = job.id

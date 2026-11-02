@@ -105,6 +105,16 @@ class JobResponse(BaseModel):
     finished_at: Optional[datetime] = None
 
 
+class JobUpdateStatusRequest(BaseModel):
+    """Payload for updating job status/progress from an external runner or API."""
+
+    status: Optional[str] = None  # "pending", "running", "completed", "failed"
+    stage: Optional[str] = None   # "cloning", "parsing", "chunking", "embeddings", "indexing", "done", "failed"
+    progress: Optional[float] = None
+    step_description: Optional[str] = None
+    error_message: Optional[str] = None
+
+
 class RepoFileResponse(BaseModel):
     """Summary of a single file within a repository."""
 

@@ -132,7 +132,7 @@ export function Header({ repo, onRefresh, onSelectSummary }: HeaderProps) {
             variant="ghost"
             size="sm"
             onClick={handleReindex}
-            disabled={isReindexing || repo.status !== "ready"}
+            disabled={isReindexing || (repo.status !== "ready" && repo.status !== "failed")}
             className="h-8 text-xs text-zinc-300 hover:text-zinc-100 hover:bg-zinc-900 gap-1.5"
           >
             <RefreshCw

@@ -34,6 +34,26 @@ class Settings(BaseSettings):
         "postgresql://repopilot:repopilot@localhost:5432/repopilot"
     )
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalize_database_url(cls, v: Any) -> str:
+        if isinstance(v, str):
+            if v.startswith("postgres://"):
+                return v.replace("postgres://", "postgresql+asyncpg://", 1)
+            if v.startswith("postgresql://") and "+asyncpg" not in v:
+                return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return str(v)
+
+    @field_validator("DATABASE_URL_SYNC", mode="before")
+    @classmethod
+    def normalize_database_url_sync(cls, v: Any) -> str:
+        if isinstance(v, str):
+            if v.startswith("postgres://"):
+                return v.replace("postgres://", "postgresql://", 1)
+            if v.startswith("postgresql+asyncpg://"):
+                return v.replace("postgresql+asyncpg://", "postgresql://", 1)
+        return str(v)
+
     # ── Vector DB (Qdrant) ────────────────────────────────────────────────
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
@@ -66,6 +86,44 @@ class Settings(BaseSettings):
     # ── GitHub OAuth ──────────────────────────────────────────────────────
     GITHUB_CLIENT_ID: str = ""
     GITHUB_CLIENT_SECRET: str = ""
+
+    # ── GitHub Actions Ingestion Runner (Production Background Worker) ────
+    INGESTION_RUNNER: str = "auto"  # "auto", "github_actions", or "local"
+    GITHUB_ACTIONS_TOKEN: Optional[str] = None
+    GITHUB_REPO_OWNER: str = "dimeneman"
+    GITHUB_REPO_NAME: str = "Repo-Pilot"
+    GITHUB_WORKFLOW_EVENT_TYPE: str = "ingest_repo"
+
+    @field_validator("GITHUB_ACTIONS_TOKEN", mode="before")
+    @classmethod
+    def fallback_actions_token(cls, v: Any) -> Optional[str]:
+        if not v or (isinstance(v, str) and not v.strip()):
+            import os
+            token = os.environ.get("GITHUB_ACTIONS_TOKEN") or os.environ.get("GITHUB_TOKEN")
+            return token.strip() if token and token.strip() else None
+        return str(v).strip()
+
+    @field_validator("GITHUB_REPO_OWNER", mode="before")
+    @classmethod
+    def fallback_owner(cls, v: Any) -> str:
+        if not v or (isinstance(v, str) and not v.strip()):
+            import os
+            repo_env = os.environ.get("GITHUB_REPOSITORY", "")
+            if "/" in repo_env:
+                return repo_env.split("/")[0].strip()
+            return "dimeneman"
+        return str(v).strip()
+
+    @field_validator("GITHUB_REPO_NAME", mode="before")
+    @classmethod
+    def fallback_repo_name(cls, v: Any) -> str:
+        if not v or (isinstance(v, str) and not v.strip()):
+            import os
+            repo_env = os.environ.get("GITHUB_REPOSITORY", "")
+            if "/" in repo_env:
+                return repo_env.split("/")[1].strip()
+            return "Repo-Pilot"
+        return str(v).strip()
 
     # ── Ingestion ─────────────────────────────────────────────────────────
     MAX_FILE_SIZE_KB: int = 500
