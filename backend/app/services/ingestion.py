@@ -52,10 +52,19 @@ async def dispatch_ingestion_job(
                 raise exc
             logger.warning(
                 f"GitHub Actions dispatch failed ({exc}). "
-                "Falling back to local worker queue."
+                "Falling back to local execution."
             )
 
-    # Local worker queue fallback (Redis or PostgreSQL polling)
+    # Direct local in-process execution (zero queue / zero background daemon required)
+    if runner_mode == "direct":
+        import asyncio
+        logger.info(f"Executing job {job_id} directly in local background task...")
+        asyncio.create_task(
+            IngestionWorker().process_job(job_id=job_id, access_token=access_token)
+        )
+        return "direct"
+
+    # Local worker queue fallback (Redis or PostgreSQL polling daemon)
     logger.info(f"Enqueueing job {job_id} to local worker queue...")
     await enqueue_job(job_id, repo_id, access_token)
     return "local"

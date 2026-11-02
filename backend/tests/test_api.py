@@ -318,6 +318,43 @@ async def test_worker_execute_fail_job(async_client: AsyncClient, sample_repo: R
     assert repo_resp.json()["status"] == "failed"
 
 
+@pytest.mark.asyncio
+async def test_reingest_existing_repo_creates_new_job(async_client: AsyncClient, sample_repo: Repository):
+    """Verify that posting an existing repository URL triggers clean re-indexing without manual job id."""
+    payload = {
+        "url": sample_repo.url,
+    }
+    response = await async_client.post("/api/v1/repos/ingest", json=payload)
+    assert response.status_code == 202
+    data = response.json()
+    assert data["id"] == str(sample_repo.id)
+    assert "job_id" in data
+    assert data["job_id"] is not None
+
+    job_id = data["job_id"]
+    job_resp = await async_client.get(f"/api/v1/jobs/{job_id}")
+    assert job_resp.status_code == 200
+    job_data = job_resp.json()
+    assert job_data["status"] == "pending"
+    assert job_data["job_type"] == "reindex"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_direct_runner_mode(monkeypatch):
+    """Verify INGESTION_RUNNER=direct routes to in-process execution."""
+    from app.services.ingestion import dispatch_ingestion_job
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "INGESTION_RUNNER", "direct")
+    runner = await dispatch_ingestion_job(
+        job_id="job-direct",
+        repo_id="repo-direct",
+        repo_url="https://github.com/test/repo",
+    )
+    assert runner == "direct"
+
+
+
 
 
 

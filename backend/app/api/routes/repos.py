@@ -76,50 +76,28 @@ async def ingest_repository(
 
     if existing is not None:
         log.info(f"Repository {payload.url} already tracked (id={existing.id}, status={existing.status})")
-        # If it failed previously or user is re-triggering, queue a new job
-        if existing.status in ("failed", "pending"):
-            existing.status = "pending"
-            existing.error_message = None
-            if payload.branch:
-                existing.default_branch = payload.branch
-
-            job = Job(
-                repo_id=existing.id,
-                job_type="ingest",
-                status="pending",
-                stage="pending",
-                progress=0.0,
-                step_description="Queued for ingestion",
-                access_token=payload.access_token,
-            )
-            db.add(job)
-            await db.commit()
-            await db.refresh(existing)
-            await db.refresh(job)
-
-            from app.workers.queue import enqueue_job
-            await enqueue_job(str(job.id), str(existing.id), payload.access_token)
-
-            resp = RepoResponse.model_validate(existing)
-            resp.job_id = job.id
-            return resp
-
-        return RepoResponse.model_validate(existing)
-
-    repo = Repository(
-        url=payload.url,
-        name=name,
-        owner=owner,
-        default_branch=payload.branch,
-        status="pending",
-    )
-    db.add(repo)
-    await db.commit()
-    await db.refresh(repo)
+        repo = existing
+        repo.status = "pending"
+        repo.error_message = None
+        if payload.branch:
+            repo.default_branch = payload.branch
+        await db.commit()
+        await db.refresh(repo)
+    else:
+        repo = Repository(
+            url=payload.url,
+            name=name,
+            owner=owner,
+            default_branch=payload.branch,
+            status="pending",
+        )
+        db.add(repo)
+        await db.commit()
+        await db.refresh(repo)
 
     job = Job(
         repo_id=repo.id,
-        job_type="ingest",
+        job_type="reindex" if existing is not None else "ingest",
         status="pending",
         stage="pending",
         progress=0.0,
@@ -130,7 +108,7 @@ async def ingest_repository(
     await db.commit()
     await db.refresh(job)
 
-    log.info(f"Created repository {repo.id} and job {job.id} for {payload.url}")
+    log.info(f"Created job {job.id} for repository {repo.id} ({payload.url})")
 
     try:
         from app.services.ingestion import dispatch_ingestion_job
@@ -138,11 +116,13 @@ async def ingest_repository(
             job_id=str(job.id),
             repo_id=str(repo.id),
             repo_url=payload.url,
-            branch=payload.branch,
+            branch=payload.branch or repo.default_branch,
             access_token=payload.access_token,
         )
         if runner == "github_actions":
             job.step_description = "Dispatched to GitHub Actions runner"
+        elif runner == "direct":
+            job.step_description = "Running in local background task"
         else:
             job.step_description = "Queued in local background worker"
         await db.commit()

@@ -212,7 +212,7 @@ export const repos = {
       method: "POST",
       body: JSON.stringify({
         url,
-        branch: branch || "main",
+        branch: branch || undefined,
         access_token: accessToken || undefined,
       }),
     }),

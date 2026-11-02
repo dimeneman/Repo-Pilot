@@ -135,10 +135,16 @@ class IngestionWorker:
                 target_dir = Path(settings.REPOS_DIR) / f"{repo.owner}_{repo.name}_{repo.id}"
                 repo_dir = await self.cloner.clone_repository(
                     url=repo.url,
-                    branch=repo.default_branch or "main",
+                    branch=repo.default_branch,
                     target_dir=str(target_dir),
                     access_token=effective_token,
                 )
+
+                # Update default branch if cloner detected a specific branch on remote
+                detected_branch = await self.cloner.detect_branch(repo_dir)
+                if detected_branch and repo.default_branch != detected_branch:
+                    repo.default_branch = detected_branch
+                    await db.commit()
 
                 # ── STEP 2: Filtering and scanning files ─────────────────────────
                 job.current_step = 2

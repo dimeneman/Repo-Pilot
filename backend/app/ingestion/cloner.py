@@ -118,8 +118,8 @@ class RepoCloner:
 
         # Build the git command
         cmd = ["git", "clone", "--depth", "1"]
-        if branch:
-            cmd.extend(["--branch", branch])
+        if branch and branch.strip():
+            cmd.extend(["--branch", branch.strip()])
         cmd.extend([exec_url, str(target_path)])
 
         logger.info("Cloning repository: %s → %s", clone_url, target_path)
@@ -133,6 +133,24 @@ class RepoCloner:
             )
             stdout, stderr = await proc.communicate()
 
+            # If cloning with a specific branch failed because the branch doesn't exist on remote,
+            # gracefully fall back to cloning the remote default branch (remote HEAD)
+            if proc.returncode != 0 and branch:
+                error_msg = stderr.decode("utf-8", errors="replace").strip()
+                if any(phrase in error_msg for phrase in ["Remote branch", "Could not find remote branch", "not found in upstream"]):
+                    logger.warning(
+                        "Branch '%s' not found on remote origin for %s. Retrying with remote default branch...",
+                        branch, url
+                    )
+                    self._cleanup(target_path)
+                    cmd_fallback = ["git", "clone", "--depth", "1", exec_url, str(target_path)]
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd_fallback,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, stderr = await proc.communicate()
+
             if proc.returncode != 0:
                 error_msg = stderr.decode("utf-8", errors="replace").strip()
                 logger.error("Git clone failed (rc=%d): %s", proc.returncode, error_msg)
@@ -142,8 +160,10 @@ class RepoCloner:
                     f"Failed to clone repository '{url}': {error_msg}"
                 )
 
+            detected = await self.detect_branch(target_path)
             logger.info(
-                "Successfully cloned %s/%s to %s", owner, repo_name, target_path
+                "Successfully cloned %s/%s (branch: %s) to %s",
+                owner, repo_name, detected or "default", target_path
             )
             return target_path
 
@@ -158,8 +178,26 @@ class RepoCloner:
             raise
 
     # ------------------------------------------------------------------ #
-    # Internal
+    # Internal & detection helpers
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    async def detect_branch(path: Path) -> str | None:
+        """Detect the active checked-out branch name of a cloned git repo."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "-C", str(path), "rev-parse", "--abbrev-ref", "HEAD",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode == 0:
+                branch = stdout.decode("utf-8").strip()
+                if branch and branch != "HEAD":
+                    return branch
+        except Exception:
+            pass
+        return None
 
     @staticmethod
     def _cleanup(path: Path) -> None:

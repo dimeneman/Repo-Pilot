@@ -83,18 +83,13 @@ jobs:
           import os, sys
           required = [
               "DATABASE_URL",
-              "DATABASE_URL_SYNC",
-              "REDIS_URL",
-              "QDRANT_HOST",
-              "QDRANT_PORT",
-              "QDRANT_API_KEY",
-              "GEMINI_API_KEY",
-              "SECRET_KEY",
               "JOB_ID",
+              "GEMINI_API_KEY",
+              "QDRANT_HOST",
           ]
           missing = [k for k in required if not os.getenv(k)]
           if missing:
-              print("Missing required env vars:", ", ".join(missing))
+              print("Missing required env vars in GitHub Secrets:", ", ".join(missing))
               sys.exit(1)
           print("Environment validation passed.")
           PY

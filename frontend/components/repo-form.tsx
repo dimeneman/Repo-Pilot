@@ -121,7 +121,7 @@ export function RepoFormDialog({
     try {
       const res = await repos.ingest(
         url.trim(),
-        branch.trim() || "main",
+        branch.trim() || undefined,
         githubToken || undefined
       );
       await mutate();
@@ -158,7 +158,7 @@ export function RepoFormDialog({
     try {
       const res = await repos.ingest(
         repoItem.html_url,
-        repoItem.default_branch || "main",
+        repoItem.default_branch || undefined,
         githubToken || undefined
       );
       await mutate();

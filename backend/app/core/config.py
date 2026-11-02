@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     GITHUB_CLIENT_SECRET: str = ""
 
     # ── GitHub Actions Ingestion Runner (Production Background Worker) ────
-    INGESTION_RUNNER: str = "auto"  # "auto", "github_actions", or "local"
+    INGESTION_RUNNER: str = "auto"  # "auto", "github_actions", "direct", or "local"
     GITHUB_ACTIONS_TOKEN: Optional[str] = None
     GITHUB_REPO_OWNER: str = "dimeneman"
     GITHUB_REPO_NAME: str = "Repo-Pilot"

@@ -24,10 +24,10 @@ class RepoIngestRequest(BaseModel):
         description="HTTPS GitHub repository URL.",
         examples=["https://github.com/owner/repo"],
     )
-    branch: str = Field(
-        default="main",
+    branch: Optional[str] = Field(
+        default=None,
         max_length=100,
-        description="Branch to index.",
+        description="Branch to index (optional; automatically detects remote default branch like main/master if omitted).",
     )
     access_token: Optional[str] = Field(
         default=None,
